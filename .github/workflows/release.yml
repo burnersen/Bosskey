@@ -1,0 +1,127 @@
+# Bosskey (https://github.com/burnersen/Bosskey)
+# Copyright (C) 2026 burnersen
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Baut und veröffentlicht einen Release. Zwei Wege, ihn zu starten:
+#
+#   git tag v1.2.0 && git push origin v1.2.0
+#   Actions > Release > Run workflow, 1.2.0 eintragen (auf main; der
+#   Release legt den Tag dann selbst an, auf dem gebauten Commit)
+#
+# Die Version steht nur im Tag: mit -ldflags kommt sie ins Programm, mit
+# go-winres in die Dateieigenschaften. Der Text des Release ist
+# .github/release-notes/<version>.md; ohne ihn wird nichts gebaut.
+#
+# Veröffentlicht wird nur, wenn jeder Schritt grün ist. Eine Version mit
+# Zusatz (1.2.0-rc1) wird ein Pre-Release. Die Dateinamen bleiben bei jeder
+# Version gleich, damit .../releases/latest/download/Bosskey.exe immer auf
+# die neueste zeigt.
+#
+# Probelauf: beim Start von Hand "dry run" anhaken. Alles wird gebaut und
+# geprüft, die Dateien bleiben zwei Wochen am Lauf, veröffentlicht wird
+# nichts. Pull Requests, die diesen Workflow oder winres/ ändern, bekommen
+# den Probelauf von selbst.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version ohne "v", z. B. 1.2.0'
+        required: true
+      dry_run:
+        description: 'Probelauf: nur bauen und prüfen, nichts veröffentlichen'
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'winres/**'
+
+permissions:
+  contents: write
+
+env:
+  DRY_RUN: ${{ github.event_name == 'pull_request' || inputs.dry_run == true }}
+
+concurrency:
+  # Probeläufe warten nie auf einen echten Release und halten keinen auf.
+  group: ${{ github.event_name == 'pull_request' && format('release-dry-{0}', github.ref) || 'release' }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: version
+        # Eingaben gehen über die Umgebung, nie direkt ins Skript.
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          v="$INPUT_VERSION"
+          if [ -z "$v" ] && [ "$GITHUB_EVENT_NAME" = pull_request ]; then v="0.0.0-dryrun"; fi
+          [ -n "$v" ] || v="${GITHUB_REF_NAME#v}"
+          if ! [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::keine Version: $v (erwartet 1.2.3 oder 1.2.3-rc1)"; exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$DRY_RUN" != true ] && [ "$GITHUB_REF_NAME" != main ]; then
+            echo "::error::ein Release kommt nur von main, nicht von $GITHUB_REF_NAME"; exit 1
+          fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+          echo "NUMERIC=${v%%-*}" >> "$GITHUB_ENV"
+
+      - name: release notes
+        run: |
+          notes=".github/release-notes/$VERSION.md"
+          if [ "$DRY_RUN" = true ] && [ ! -f "$notes" ]; then
+            echo "Probelauf ohne $notes: nehme einen Platzhalter."
+            echo "Probelauf von $VERSION." > "$RUNNER_TEMP/notes.md"
+          elif [ ! -f "$notes" ]; then
+            echo "::error::$notes fehlt. Schreib, was sich für Nutzer ändert, dann nochmal."; exit 1
+          else
+            cp "$notes" "$RUNNER_TEMP/notes.md"
+          fi
+
+      - name: tests
+        run: go test -count=1 ./...
+
+      - name: build
+        run: |
+          set -euo pipefail
+          go run github.com/tc-hib/go-winres@v0.3.3 make --in winres/winres.json --out rsrc \
+            --arch amd64,arm64 --product-version "$NUMERIC" --file-version "$NUMERIC"
+          ldflags="-s -w -X main.version=$VERSION"
+          mkdir -p dist
+          # Bosskey gibt es nur für Windows. -H windowsgui: kein Konsolenfenster.
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$ldflags -H windowsgui" -o dist/Bosskey.exe .
+          GOOS=windows GOARCH=arm64 go build -trimpath -ldflags "$ldflags -H windowsgui" -o dist/Bosskey-arm64.exe .
+          # Die Version muss ankommen: einmal für Linux bauen, nur zum Prüfen.
+          go build -ldflags "$ldflags" -o "$RUNNER_TEMP/bosskey-check" .
+          "$RUNNER_TEMP/bosskey-check" -version | grep -qx "Bosskey $VERSION"
+          (cd dist && sha256sum -- * > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      - name: Dateien des Probelaufs aufheben
+        if: env.DRY_RUN == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: Bosskey-${{ env.VERSION }}-dry-run
+          path: dist/
+          retention-days: 14
+
+      - name: publish
+        if: env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          extra=()
+          [[ "$VERSION" == *-* ]] && extra+=(--prerelease)
+          gh release create "v$VERSION" dist/* --target "$GITHUB_SHA" \
+            --title "Bosskey $VERSION" --notes-file "$RUNNER_TEMP/notes.md" "${extra[@]}"

@@ -1,0 +1,100 @@
+# Bosskey (https://github.com/burnersen/Bosskey)
+# Copyright (C) 2026 burnersen
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Prüft jeden Push und Pull Request. Veröffentlicht wird hier nichts.
+#
+# Linux lässt die Tests laufen: die Logik (INI, Tasten, Desktop-Rechnung)
+# ist plattformneutral und Linux-Runner sind schnell. Der Windows-Teil wird
+# von Linux aus für x64 und ARM64 geprüft und gebaut, danach einmal auf
+# einem echten Windows-Runner gestartet, auch als Tray mit Probelauf.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          # Die go-Zeile in go.mod ist die Version, mit der Releases gebaut werden.
+          go-version-file: go.mod
+          # Ohne Abhängigkeiten kein go.sum: ein Cache würde nur warnen.
+          cache: false
+
+      # gofmt -l listet nur und endet mit 0; aus der Liste ein Urteil zu
+      # machen, ist der Sinn dieses Schritts.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then echo "::error::nicht gofmt-sauber:"; echo "$unformatted"; exit 1; fi
+
+      - name: go vet (Linux, Windows x64, Windows ARM64)
+        run: |
+          go vet ./...
+          GOOS=windows GOARCH=amd64 go vet ./...
+          GOOS=windows GOARCH=arm64 go vet ./...
+
+      - name: go test
+        run: go test -race -count=1 ./...
+
+      # Mit dem Go aus go.mod gebaut (GOTOOLCHAIN=local): ein govulncheck
+      # aus älterem Go kann neueren Quelltext nicht lesen.
+      - name: govulncheck
+        run: |
+          GOTOOLCHAIN=local go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          govulncheck ./...
+          GOOS=windows govulncheck ./...
+
+      - name: Bau für jedes Release-Ziel
+        run: |
+          GOOS=windows GOARCH=amd64 go build -ldflags "-H windowsgui" -o /dev/null .
+          GOOS=windows GOARCH=arm64 go build -ldflags "-H windowsgui" -o /dev/null .
+
+  windows:
+    runs-on: windows-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: go test (echtes Windows)
+        run: go test -count=1 ./...
+      - name: build
+        run: go build -trimpath -ldflags "-H windowsgui" -o Bosskey.exe .
+      # Bosskey ist ein Fensterprogramm: PowerShell wartet darauf nur mit
+      # Start-Process -Wait. Die Ausgabe geht in Dateien, so kommt sie an,
+      # ohne dass Bosskey eine Konsole braucht.
+      - name: smoke test
+        shell: pwsh
+        run: |
+          $env:BOSSKEY_HOME = Join-Path $env:RUNNER_TEMP "bosskey-home"
+          function Start-Bosskey([string[]]$Arguments) {
+            $p = Start-Process -FilePath .\Bosskey.exe -ArgumentList $Arguments -Wait -PassThru -NoNewWindow `
+              -RedirectStandardOutput out.txt -RedirectStandardError err.txt
+            Write-Host "Bosskey $Arguments -> Exit-Code $($p.ExitCode)"
+            Get-Content out.txt, err.txt | Write-Host
+            return $p.ExitCode
+          }
+          if ((Start-Bosskey @('-version')) -ne 0) { exit 1 }
+          if ((Get-Content out.txt) -ne 'Bosskey dev') { Write-Host "::error::-version gibt nicht 'Bosskey dev' aus"; exit 1 }
+          if ((Start-Bosskey @('-quatsch')) -ne 2) { Write-Host "::error::falscher Aufruf muss Exit-Code 2 geben"; exit 1 }
+          if ((Start-Bosskey @('-pruefen')) -ne 0) { Write-Host "::error::-pruefen mit Standardwerten muss 0 geben"; exit 1 }
+          # Der echte Tray: Fenster, INI anlegen, Hotkey anmelden, nach 3 Sekunden Ende.
+          if ((Start-Bosskey @('-probelauf')) -ne 0) { Write-Host "::error::Probelauf gescheitert"; exit 1 }
+          $log = Get-Content (Join-Path $env:BOSSKEY_HOME 'logs\bosskey.log') -Raw
+          Write-Host $log
+          foreach ($want in @('msg="config created"', 'msg="hotkey registered"', 'msg="probe finished"', 'msg=done')) {
+            if (-not $log.Contains($want)) { Write-Host "::error::im Log fehlt $want"; exit 1 }
+          }
+          if (-not (Test-Path (Join-Path $env:BOSSKEY_HOME 'Bosskey.ini'))) { Write-Host "::error::Bosskey.ini nicht angelegt"; exit 1 }
+          exit 0

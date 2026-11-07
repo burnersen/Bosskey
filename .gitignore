@@ -1,0 +1,36 @@
+# --- Secrets: never commit (dev-starterkit 08-sicherheit.md) ---
+.env
+.env.*
+*.key
+*.pem
+*.pfx
+*.p12
+secrets/
+
+# --- Build output: belongs to a release, not to the repository ---
+/dist/
+*.exe
+/Bosskey
+/bosskey
+# go-winres output, made by the release workflow from winres/winres.json
+*.syso
+*.test
+
+# --- Files the program writes when started from here ---
+*.log
+*.log.[0-9]
+Bosskey.ini
+Bosskey.ini.bak
+portable.txt
+logs/
+
+# --- Private notes and safety copies: never public ---
+_notizen/
+_backup*/
+
+# --- Editors and operating systems ---
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
