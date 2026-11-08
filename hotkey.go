@@ -43,7 +43,10 @@ type keyName struct {
 // keyNames sind alle Tasten mit Namen. Buchstaben, Ziffern und F1 bis F24
 // kommen in init dazu.
 var keyNames = []keyName{
-	{0x13, "Pause", []string{"pause", "untbr"}, false},
+	{0x13, "Pause", []string{"pause"}, false},
+	// Strg+Pause meldet Windows als eigene Taste (VK_CANCEL), parseHotkey
+	// macht daraus Strg+Untbr, sonst würde sie nie auslösen.
+	{0x03, "Untbr", []string{"untbr", "break", "cancel"}, false},
 	{0x91, "Rollen", []string{"rollen", "scrolllock", "scroll", "rollenfeststelltaste"}, false},
 	{0x2C, "Druck", []string{"druck", "print", "printscreen", "prtsc", "drucken"}, false},
 	{0x2D, "Einfg", []string{"einfg", "einfuegen", "insert", "ins"}, false},
@@ -141,8 +144,16 @@ func parseHotkey(text string) (hotkey, error) {
 		}
 		h.VK = vk
 	}
+	if h.VK == vkPause && h.Mods&modControl != 0 {
+		h.VK = vkCancel
+	}
 	return h, nil
 }
+
+const (
+	vkPause  = 0x13
+	vkCancel = 0x03 // Strg+Pause
+)
 
 func lookupKey(p string) (uint32, bool) {
 	for _, k := range keyNames {

@@ -26,7 +26,9 @@ func TestParseHotkey(t *testing.T) {
 		{"Menü", 0, 0x5D, "Menue"},
 		{"Num7", 0, 0x67, "Num7"},
 		{"F24", 0, 0x87, "F24"},
-		{"Strg+0x13", modControl, 0x13, "Strg+Pause"},
+		{"Strg+0x13", modControl, 0x03, "Strg+Untbr"},
+		{"Strg+Pause", modControl, 0x03, "Strg+Untbr"},
+		{"Alt+Pause", modAlt, 0x13, "Alt+Pause"},
 		{"Win+0xE8", modWin, 0xE8, "Win+0xE8"},
 		{"Strg+Rück", modControl, 0x08, "Strg+Ruecktaste"},
 	}

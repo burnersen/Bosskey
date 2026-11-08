@@ -39,11 +39,13 @@ const (
 	probeDuration = 3000 // Millisekunden
 
 	// Menüpunkte. Die Tasten bekommen menuBinding + Index.
+	menuSetup      = 9
 	menuOpenConfig = 10
 	menuReload     = 11
 	menuOpenLog    = 12
 	menuAutostart  = 13
 	menuQuit       = 14
+	menuAnimation  = 15
 	menuBinding    = 100
 
 	// balloonMax: Windows zeigt höchstens 255 Zeichen in der Sprechblase.
@@ -63,7 +65,9 @@ type tray struct {
 
 	cfg      config
 	cfgStamp fileStamp
+	bindings []binding           // aus tasten.json, sortiert
 	keys     map[uintptr]binding // registrierte Hotkeys nach ID
+	anim     animationState
 
 	// iconMu schützt das Symbol: die Sprechblasen kommen auch aus dem
 	// Wechsel-Goroutine.
@@ -120,8 +124,11 @@ func runTray(opts trayOptions) error {
 	if err != nil {
 		return err
 	}
-	t.applyConfig(loaded, true)
-
+	keys, err := loadBindings(bindingsPath(t.paths), loaded.Legacy)
+	if err != nil {
+		return err
+	}
+	t.startup(loaded, keys)
 	if st, err := readDesktops(); err != nil {
 		t.logger.Warn("read desktops", "err", err)
 	} else {
@@ -143,6 +150,9 @@ func runTray(opts trayOptions) error {
 		}
 		if r == 0 { // WM_QUIT
 			break
+		}
+		if setupDialogMessage(&m) {
+			continue
 		}
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
 		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
@@ -185,15 +195,21 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	}
 	switch {
 	case msg == wmHotkey:
-		if b, ok := t.keys[wParam]; ok {
+		// Während einer Aufnahme gehört die Tastatur dem Fenster.
+		if b, ok := t.keys[wParam]; ok && keyHook.handle == 0 {
 			t.requestJump(b)
 		}
 		return 0
 	case msg == trayCallback:
 		switch lParam & 0xFFFF {
-		case wmRButtonUp, wmLButtonUp, wmContextMenu:
+		case wmLButtonUp:
+			t.openSetup(false)
+		case wmRButtonUp, wmContextMenu:
 			t.showMenu()
 		}
+		return 0
+	case msg == wmUnhook:
+		maybeUnhook(false)
 		return 0
 	case msg == wmTimer && wParam == timerWatch:
 		t.watch()
@@ -288,7 +304,7 @@ func (t *tray) updateTooltip() {
 // bei 127 Zeichen ab, das macht copyUTF16 genauso.
 func (t *tray) tooltip() string {
 	parts := []string{}
-	for _, b := range t.cfg.Bindings {
+	for _, b := range t.bindings {
 		parts = append(parts, b.Hotkey.String()+" = "+b.Target.String())
 	}
 	if len(parts) == 0 {
@@ -349,6 +365,10 @@ func stampOf(path string) fileStamp {
 // watch läuft alle zwei Sekunden: Symbol noch da? INI geändert?
 func (t *tray) watch() {
 	t.addIcon()
+	if hookStuck() {
+		t.logger.Warn("keyboard hook removed by safety timer")
+		maybeUnhook(true)
+	}
 	if stampOf(t.paths.ConfigFile) != t.cfgStamp {
 		t.logger.Info("config file changed")
 		t.reload()
@@ -357,75 +377,189 @@ func (t *tray) watch() {
 
 func (t *tray) reload() {
 	loaded, err := loadConfig(t.paths.ConfigFile)
-	if err != nil {
-		var msg string
-		var ue *UserError
-		if errors.As(err, &ue) {
-			msg = ue.Msg + ". " + ue.Hint
-		} else {
-			msg = err.Error()
+	if err == nil {
+		var keys bindingsResult
+		keys, err = loadBindings(bindingsPath(t.paths), loaded.Legacy)
+		if err == nil {
+			t.applyConfig(loaded)
+			t.bindings = sortedBindings(keys.Bindings)
+			problems := append(loaded.Warnings, keys.Warnings...)
+			active, regProblems := t.registerAll()
+			t.announce(append(problems, regProblems...), "Einstellungen übernommen", active)
+			if theSetup != nil {
+				theSetup.fill()
+			}
+			return
 		}
-		t.logger.Error("reload config", "err", err)
-		t.cfgStamp = stampOf(t.paths.ConfigFile) // nicht alle zwei Sekunden dieselbe Meldung
-		t.notify("Einstellungen nicht gelesen", msg+" Die bisherigen Tasten gelten weiter.", true)
-		return
 	}
-	t.applyConfig(loaded, false)
+	t.logger.Error("reload config", "err", err)
+	t.cfgStamp = stampOf(t.paths.ConfigFile) // nicht alle zwei Sekunden dieselbe Meldung
+	t.notify("Einstellungen nicht gelesen", errorText(err)+" Die bisherigen Tasten gelten weiter.", true)
 }
 
-// applyConfig meldet die alten Hotkeys ab und die neuen an und sagt dem
-// Nutzer, was gilt und was nicht geht.
-func (t *tray) applyConfig(loaded configLoad, first bool) {
-	for id := range t.keys {
-		procUnregisterHotKey.Call(t.hwnd, id)
+// startup: Einstellungen, Tasten und Animationen beim Start, und eine
+// Meldung, die alles zusammenfasst (mehrere Sprechblasen hintereinander
+// würden sich gegenseitig verdrängen).
+func (t *tray) startup(loaded configLoad, keys bindingsResult) {
+	t.applyConfig(loaded)
+	t.bindings = sortedBindings(keys.Bindings)
+	problems := append(append([]string{}, loaded.Warnings...), keys.Warnings...)
+	active, regProblems := t.registerAll()
+	problems = append(problems, regProblems...)
+
+	var notes []string
+	if keys.Migrated > 0 {
+		notes = append(notes, fmt.Sprintf("%d Taste(n) aus Bosskey.ini übernommen. Ab jetzt: Linksklick aufs Symbol.", keys.Migrated))
+		t.logger.Info("bindings migrated from ini", "count", keys.Migrated)
 	}
-	t.keys = map[uintptr]binding{}
+	if note := t.startAnimations(); note != "" {
+		notes = append(notes, note)
+	}
+
+	switch {
+	case len(problems) > 0:
+		t.announce(problems, "", nil)
+	case len(notes) > 0:
+		t.notify("Bosskey läuft", strings.Join(notes, "\n"), false)
+	case t.cfg.ShowStartMessage:
+		t.notify("Bosskey läuft", strings.Join(active, "\n"), false)
+	}
+	if keys.Created {
+		t.openSetup(true) // erster Start: gleich zeigen, wie es geht
+	}
+}
+
+// applyConfig übernimmt die INI.
+func (t *tray) applyConfig(loaded configLoad) {
 	t.cfg = loaded.Config
 	t.cfgStamp = stampOf(t.paths.ConfigFile)
-
 	if loaded.Created {
 		t.logger.Info("config created", "path", t.paths.ConfigFile)
 	}
 	for _, k := range loaded.Added {
 		t.logger.Info("config key added", "key", k)
 	}
-	problems := append([]string{}, loaded.Warnings...)
-	var active []string
-	for i, b := range t.cfg.Bindings {
+}
+
+// registerAll meldet die alten Hotkeys ab und t.bindings neu an.
+func (t *tray) registerAll() (active, problems []string) {
+	for id := range t.keys {
+		procUnregisterHotKey.Call(t.hwnd, id)
+	}
+	t.keys = map[uintptr]binding{}
+	for i, b := range t.bindings {
 		id := uintptr(i + 1)
 		r, _, err := procRegisterHotKey.Call(t.hwnd, id, uintptr(b.Hotkey.Mods|modNoRepeat), uintptr(b.Hotkey.VK))
 		if r == 0 {
-			reason := "Windows lässt sie nicht zu"
+			reason := "geht nicht"
 			if err == syscall.Errno(errorHotkeyAlreadyRegistered) {
 				reason = "ist schon von Windows oder einem anderen Programm belegt"
 			}
-			problems = append(problems, fmt.Sprintf("%s (Zeile %d) %s. Nimm eine andere Taste.", b.Hotkey, b.Line, reason))
-			t.logger.Warn("hotkey not registered", "hotkey", b.Hotkey.String(), "line", b.Line, "err", err)
+			problems = append(problems, fmt.Sprintf("%s %s. Linksklick aufs Symbol, dann eine andere Taste aufnehmen.", b.Hotkey, reason))
+			t.logger.Warn("hotkey not registered", "hotkey", b.Hotkey.String(), "err", err)
 			continue
 		}
 		t.keys[id] = b
 		active = append(active, b.Hotkey.String()+" = "+b.Target.String())
 		t.logger.Info("hotkey registered", "hotkey", b.Hotkey.String(), "target", b.Target.String())
 	}
-	if len(t.cfg.Bindings) == 0 {
-		problems = append(problems, "Keine Taste eingestellt. Rechtsklick aufs Symbol > Einstellungen öffnen, unter [Tasten] z. B. \"Pause = 1\" eintragen.")
+	if len(t.bindings) == 0 {
+		problems = append(problems, "Keine Taste eingestellt. Linksklick aufs Symbol, dann eine Taste aufnehmen.")
 	}
+	t.updateTooltip()
+	return active, problems
+}
+
+// setBindings speichert neue Tasten aus dem Fenster und meldet sie an.
+func (t *tray) setBindings(list []binding) error {
+	if err := writeBindings(bindingsPath(t.paths), list); err != nil {
+		t.logger.Error("save bindings", "err", err)
+		return err
+	}
+	t.bindings = sortedBindings(list)
+	_, problems := t.registerAll()
+	for _, p := range problems {
+		t.logger.Warn("bindings", "problem", p)
+	}
+	t.logger.Info("bindings saved", "count", len(list))
+	return nil
+}
+
+// announce zeigt Probleme als Warnung, sonst (wenn title gesetzt ist) was gilt.
+func (t *tray) announce(problems []string, title string, active []string) {
 	for _, p := range problems {
 		t.logger.Warn("config", "problem", p)
 	}
-	t.updateTooltip()
-
 	switch {
 	case len(problems) > 0:
 		text := problems[0]
 		if len(problems) > 1 {
 			text += fmt.Sprintf(" (und %d weitere, siehe Protokoll)", len(problems)-1)
 		}
-		t.notify("Bosskey: Einstellungen prüfen", text, true)
-	case first && t.cfg.ShowStartMessage:
-		t.notify("Bosskey läuft", strings.Join(active, "\n"), false)
-	case !first:
-		t.notify("Einstellungen übernommen", strings.Join(active, "\n"), false)
+		t.notify("Bosskey: bitte prüfen", text, true)
+	case title != "":
+		t.notify(title, strings.Join(active, "\n"), false)
+	}
+}
+
+// ---- Animationen ---------------------------------------------------------------
+
+// startAnimations sorgt beim Start dafür, dass der Haken "Desktop-Wechsel
+// ohne Animation" gilt. Gibt den Satz für die Startmeldung zurück, wenn
+// sich etwas geändert hat oder es nicht ging.
+func (t *tray) startAnimations() string {
+	path := animationPath(t.paths)
+	st, err := readAnimationState(path)
+	if err != nil {
+		t.logger.Warn("animation state", "err", err)
+		return ""
+	}
+	t.anim = st
+	if !st.Hide {
+		return ""
+	}
+	return t.hideAnimations()
+}
+
+// hideAnimations schaltet die Animationen ab und sagt, was passiert ist.
+func (t *tray) hideAnimations() string {
+	cur, err := getAnimations()
+	if err != nil {
+		t.logger.Warn("read animations", "err", err)
+		return "Konnte die Windows-Animationen nicht abschalten. " + animationTip
+	}
+	plan := planHide(t.anim, cur)
+	if plan.Set {
+		if err := setAnimations(plan.To); err != nil {
+			t.logger.Warn("set animations", "err", err)
+			return "Konnte die Windows-Animationen nicht abschalten. " + animationTip
+		}
+	}
+	t.saveAnimationState(plan.State)
+	if !plan.Changed {
+		return ""
+	}
+	t.logger.Info("animations off", "before", fmt.Sprintf("%+v", *plan.State.Before))
+	return "Windows-Animationen aus, damit man den Desktop-Wechsel nicht sieht. Rein optisch, zurück per Rechtsklick > Desktop-Wechsel ohne Animation."
+}
+
+func (t *tray) restoreAnimations() string {
+	plan := planRestore(t.anim)
+	if plan.Set {
+		if err := setAnimations(plan.To); err != nil {
+			t.logger.Warn("restore animations", "err", err)
+			return "Konnte die Windows-Animationen nicht zurückstellen: " + err.Error()
+		}
+		t.logger.Info("animations restored", "to", fmt.Sprintf("%+v", plan.To))
+	}
+	t.saveAnimationState(plan.State)
+	return "Windows-Animationen sind wieder so wie vor Bosskey."
+}
+
+func (t *tray) saveAnimationState(s animationState) {
+	t.anim = s
+	if err := writeAnimationState(animationPath(t.paths), s); err != nil {
+		t.logger.Warn("save animation state", "err", err)
 	}
 }
 
@@ -501,7 +635,9 @@ func (t *tray) showMenu() {
 	}
 	add(mfString|mfGrayed, 0, appName+" "+version)
 	add(mfSeparator, 0, "")
-	for i, b := range t.cfg.Bindings {
+	add(mfString, menuSetup, "Tasten einrichten ...")
+	add(mfSeparator, 0, "")
+	for i, b := range t.bindings {
 		flags := uintptr(mfString)
 		label := "Zu " + b.Target.String()
 		if b.Target.Back {
@@ -509,10 +645,15 @@ func (t *tray) showMenu() {
 		}
 		add(flags, uintptr(menuBinding+i), label+"\t"+b.Hotkey.String())
 	}
-	if len(t.cfg.Bindings) > 0 {
+	if len(t.bindings) > 0 {
 		add(mfSeparator, 0, "")
 	}
-	add(mfString, menuOpenConfig, "Einstellungen öffnen")
+	anim := uintptr(mfString)
+	if t.anim.Hide {
+		anim |= mfChecked
+	}
+	add(anim, menuAnimation, "Desktop-Wechsel ohne Animation")
+	add(mfString, menuOpenConfig, "Weitere Einstellungen (INI)")
 	add(mfString, menuReload, "Einstellungen neu laden")
 	add(mfString, menuOpenLog, "Protokoll öffnen")
 	auto := uintptr(mfString)
@@ -523,6 +664,7 @@ func (t *tray) showMenu() {
 	add(mfSeparator, 0, "")
 	add(mfString, menuQuit, "Beenden")
 
+	procSetMenuDefaultItem.Call(menu, menuSetup, 0) // fett: dasselbe wie Linksklick
 	var pt point
 	procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
 	// Ohne SetForegroundWindow geht das Menü nicht zu, wenn man daneben
@@ -536,6 +678,19 @@ func (t *tray) showMenu() {
 
 func (t *tray) menuCommand(cmd int) {
 	switch {
+	case cmd == menuSetup:
+		t.openSetup(false)
+	case cmd == menuAnimation:
+		var note string
+		if t.anim.Hide {
+			note = t.restoreAnimations()
+		} else {
+			t.anim.Hide = true
+			if note = t.hideAnimations(); note == "" {
+				note = "Die Windows-Animationen waren schon aus."
+			}
+		}
+		t.notify("Desktop-Wechsel ohne Animation", note, false)
 	case cmd == menuOpenConfig:
 		if _, err := os.Stat(t.paths.ConfigFile); err != nil {
 			t.reload() // legt die Datei mit den Standardwerten an
@@ -556,8 +711,8 @@ func (t *tray) menuCommand(cmd int) {
 	case cmd == menuQuit:
 		t.logger.Info("quit by user")
 		procDestroyWindow.Call(t.hwnd)
-	case cmd >= menuBinding && cmd < menuBinding+len(t.cfg.Bindings):
-		t.requestJump(t.cfg.Bindings[cmd-menuBinding])
+	case cmd >= menuBinding && cmd < menuBinding+len(t.bindings):
+		t.requestJump(t.bindings[cmd-menuBinding])
 	}
 }
 
@@ -578,6 +733,10 @@ func (t *tray) open(path string) {
 }
 
 func (t *tray) cleanup() {
+	if theSetup != nil {
+		procDestroyWindow.Call(theSetup.hwnd)
+	}
+	maybeUnhook(true)
 	for id := range t.keys {
 		procUnregisterHotKey.Call(t.hwnd, id)
 	}

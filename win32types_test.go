@@ -25,6 +25,8 @@ func TestWin32StructSizes(t *testing.T) {
 		{"WNDCLASSEXW", unsafe.Sizeof(wndClassEx{}), 80},
 		{"MSG", unsafe.Sizeof(winMsg{}), 48},
 		{"OSVERSIONINFOW", unsafe.Sizeof(osVersionInfo{}), 276},
+		{"KBDLLHOOKSTRUCT", unsafe.Sizeof(kbdLLHookStruct{}), 24},
+		{"RECT", unsafe.Sizeof(rect{}), 16},
 	}
 	for _, c := range cases {
 		if c.got != c.want {

@@ -23,8 +23,8 @@ func TestDefaultsAreValid(t *testing.T) {
 			t.Errorf("Kommentar von %s hat einen Zeilenumbruch", s.key)
 		}
 	}
-	if _, err := parseHotkey(strings.TrimSpace(strings.Split(defaultBinding, "=")[0])); err != nil {
-		t.Errorf("Standard-Taste geht nicht: %v", err)
+	if d := defaultBindings(); len(d) != 1 || d[0].Hotkey.VK != vkPause || d[0].Hotkey.Mods != 0 {
+		t.Errorf("Standard-Taste: %+v", d)
 	}
 }
 
@@ -43,23 +43,20 @@ func TestMissingFileIsCreated(t *testing.T) {
 			t.Errorf("neue Datei ohne %s", s.key)
 		}
 	}
-	if len(res.Config.Bindings) != 1 || res.Config.Bindings[0].Hotkey.VK != 0x13 || res.Config.Bindings[0].Target.Desktop != 1 {
-		t.Fatalf("Standard-Taste fehlt: %+v", res.Config.Bindings)
+	if strings.Contains(string(data), "[Tasten]") || res.Legacy.Present {
+		t.Fatal("neue Datei hat noch einen Abschnitt [Tasten]")
 	}
 	// Die neue Datei nochmal lesen: keine Warnung, nichts angehängt.
 	again, err := loadConfig(path)
 	if err != nil || again.Created || len(again.Added) > 0 || len(again.Warnings) > 0 {
 		t.Fatalf("zweites Lesen: %+v, %v", again, err)
 	}
-	if len(again.Config.Bindings) != 1 {
-		t.Fatalf("Tasten beim zweiten Lesen: %+v", again.Config.Bindings)
-	}
 }
 
 func TestReadConfigWritesNothing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "x.ini")
 	res, err := readConfig(path)
-	if err != nil || !res.Missing || len(res.Config.Bindings) != 1 {
+	if err != nil || !res.Missing {
 		t.Fatalf("%+v, %v", res, err)
 	}
 	if _, err := os.Stat(path); err == nil {
@@ -130,22 +127,22 @@ func TestMissingKeysAreAppendedWithBackup(t *testing.T) {
 	if strings.Contains(strings.ReplaceAll(text, "\r\n", ""), "\n") {
 		t.Fatalf("gemischte Zeilenenden: %q", text)
 	}
-	// Der angehängte Schlüssel steht jetzt unter [Tasten] und muss trotzdem
-	// als Einstellung gelten, nicht als Taste.
+	// Der angehängte Schlüssel steht jetzt unter dem alten [Tasten] und muss
+	// trotzdem als Einstellung gelten, nicht als Taste.
 	again, err := loadConfig(path)
 	if err != nil || len(again.Warnings) > 0 || len(again.Added) > 0 {
 		t.Fatalf("nach dem Anhängen: %+v, %v", again, err)
 	}
-	if len(again.Config.Bindings) != 1 || again.Config.Bindings[0].Target.Desktop != 2 {
-		t.Fatalf("Tasten: %+v", again.Config.Bindings)
+	if len(again.Legacy.Bindings) != 1 || again.Legacy.Bindings[0].Target.Desktop != 2 {
+		t.Fatalf("alte Tasten: %+v", again.Legacy.Bindings)
 	}
 }
 
-func TestHotkeySection(t *testing.T) {
+func TestLegacyHotkeySection(t *testing.T) {
 	text := strings.Join([]string{
 		"meldungBeimStart=true",
 		"nochmalZurueck=false",
-		"Strg+Alt+1 = 1",   // 3: nicht unter [Tasten]
+		"Strg+Alt+1 = 1",   // 3: außerhalb von [Tasten]: unbekannte Einstellung
 		"[Tasten]",         // 4
 		"Pause = 1",        // 5
 		"Strg+Alt+2 = 2",   // 6
@@ -153,26 +150,33 @@ func TestHotkeySection(t *testing.T) {
 		"Strg+Hyper+3 = 3", // 8: unbekannte Umschalttaste
 		"F5 = null",        // 9: kein Ziel
 		"Win+Z = zurück",   // 10
-		"A = 1",            // 11: gilt, aber Warnung
-		"[Sonstiges]",      // 12
-		"F7 = 1",           // 13: unter unbekanntem Abschnitt
+		"A = 1",            // 11
+		"[Sonstiges]",      // 12: unbekannter Abschnitt
+		"F7 = 1",           // 13: darunter, schon mit dem Abschnitt gemeldet
 	}, "\n")
-	cfg, _, warnings := parseConfig("x.ini", text)
+	_, _, warnings, legacy := parseConfig("x.ini", text)
+	if !legacy.Present {
+		t.Fatal("[Tasten] nicht erkannt")
+	}
 	var got []string
-	for _, b := range cfg.Bindings {
+	for _, b := range legacy.Bindings {
 		got = append(got, b.Hotkey.String()+"="+b.Target.String())
 	}
 	want := []string{"Pause=Desktop 1", "Strg+Alt+2=Desktop 2", "Win+Z=zurück zum vorigen Desktop", "A=Desktop 1"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("Tasten:\n got %q\nwant %q", got, want)
 	}
-	for _, w := range []string{"Zeile 3:", "Zeile 7:", "Zeile 8:", "Zeile 9:", "Zeile 11:", "Zeile 12:", "Zeile 13:"} {
-		if !strings.Contains(strings.Join(warnings, "\n"), w) {
-			t.Errorf("keine Warnung %q in %q", w, warnings)
+	if len(warnings) != 2 || !strings.Contains(warnings[0], "Zeile 3:") || !strings.Contains(warnings[1], "Zeile 12:") {
+		t.Errorf("Warnungen der INI: %q", warnings)
+	}
+	lw := strings.Join(legacy.Warnings, "\n")
+	for _, w := range []string{"Zeile 7:", "Zeile 8:", "Zeile 9:"} {
+		if !strings.Contains(lw, w) {
+			t.Errorf("keine Warnung %q in %q", w, legacy.Warnings)
 		}
 	}
-	if len(warnings) != 7 {
-		t.Errorf("%d Warnungen, erwartet 7: %q", len(warnings), warnings)
+	if len(legacy.Warnings) != 3 {
+		t.Errorf("%d Warnungen zu alten Tasten, erwartet 3: %q", len(legacy.Warnings), legacy.Warnings)
 	}
 }
 

@@ -89,3 +89,16 @@ type osVersionInfo struct {
 	platform uint32
 	csd      [128]uint16
 }
+
+// kbdLLHookStruct ist KBDLLHOOKSTRUCT, 24 Byte unter 64 Bit. So meldet der
+// Tastatur-Hook jeden Tastendruck.
+type kbdLLHookStruct struct {
+	vkCode    uint32
+	scanCode  uint32
+	flags     uint32
+	time      uint32
+	extraInfo uintptr
+}
+
+// rect ist RECT.
+type rect struct{ left, top, right, bottom int32 }

@@ -16,18 +16,26 @@ import (
 	"strings"
 )
 
-// config ist alles, was der Nutzer in der INI einstellen kann.
+// config ist alles, was der Nutzer in der INI einstellen kann. Die Tasten
+// stehen seit 0.2.0 in tasten.json (bindings.go).
 type config struct {
 	ShowStartMessage bool
 	ToggleBack       bool
-	Bindings         []binding // aus dem Abschnitt [Tasten], in der Reihenfolge der Datei
 }
 
-// binding ist eine Zeile aus [Tasten]: diese Taste springt dorthin.
+// binding ist eine Taste und ihr Ziel.
 type binding struct {
 	Hotkey hotkey
 	Target target
-	Line   int // Zeile in der Datei, für Meldungen
+}
+
+// legacyHotkeys ist der Abschnitt [Tasten] aus Version 0.1.0. Er wird nur
+// gelesen, um die Tasten einmal nach tasten.json zu übernehmen; danach
+// übergeht Bosskey ihn still (wie ein ausgemusterter Schlüssel, Kit K5).
+type legacyHotkeys struct {
+	Present  bool
+	Bindings []binding
+	Warnings []string
 }
 
 // setting ist ein Schlüssel der INI außerhalb von [Tasten]. Diese Tabelle
@@ -62,29 +70,9 @@ var settings = []setting{
 	},
 }
 
-// hotkeySection ist der Abschnitt mit den Tasten. Andere Schreibweisen
-// werden auch erkannt (sectionNames).
-const hotkeySection = "Tasten"
-
+// sectionNames: so darf der Abschnitt mit den Tasten aus Version 0.1.0
+// heißen ([Tasten] und zwei andere Schreibweisen).
 var sectionNames = []string{"tasten", "tastenkuerzel", "hotkeys"}
-
-// hotkeyHelp steht in einer neuen Datei unter [Tasten].
-var hotkeyHelp = []string{
-	"Eine Zeile je Taste:  Taste = Desktop-Nummer  (1 ist der erste, ganz links in der Übersicht mit Win+Tab).",
-	"Statt einer Nummer geht auch \"zurück\": dann springt die Taste dorthin, wo du vor dem letzten Sprung warst.",
-	"Umschalttasten: Strg, Alt, Umschalt, Win, AltGr. Beispiele:",
-	"  Strg+Alt+1 = 1",
-	"  Strg+Alt+2 = 2",
-	"  F12 = 1",
-	"  Strg+Alt+Z = zurück",
-	"Tasten mit Namen: Pause, Rollen, Druck, Einfg, Entf, Pos1, Ende, BildAuf, BildAb, Menue, Leertaste,",
-	"Esc, Tab, Enter, Links, Hoch, Rechts, Runter, F1 bis F24, Num0 bis Num9, A bis Z, 0 bis 9.",
-	"Gut als Boss-Taste: eine, die du sonst nie brauchst, z. B. Pause, Rollen oder Menue.",
-}
-
-// defaultBinding steht in einer neuen Datei aktiv unter [Tasten]: die
-// Boss-Taste, mit der Bosskey gleich etwas tut.
-const defaultBinding = "Pause = 1"
 
 // configLoad ist, was beim Lesen herauskam. Created, Added und Warnings
 // meldet der Aufrufer dem Nutzer.
@@ -93,7 +81,8 @@ type configLoad struct {
 	Created  bool     // Datei fehlte und wurde mit Standardwerten angelegt
 	Missing  bool     // Datei fehlt (nur readConfig, das nichts anlegt)
 	Added    []string // fehlende Schlüssel, die angehängt wurden (alte Datei als .bak daneben)
-	Warnings []string // unbekannte Schlüssel, ungültige Werte, Tasten, die nicht gehen
+	Warnings []string // unbekannte Schlüssel, ungültige Werte
+	Legacy   legacyHotkeys
 }
 
 // loadConfig liest die INI für den Tray-Betrieb.
@@ -148,30 +137,32 @@ type parsed struct {
 func readConfigData(path string) (parsed, []byte, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		cfg, _, warnings := parseConfig(filepath.Base(path), configTemplate())
+		cfg, _, warnings, _ := parseConfig(filepath.Base(path), configTemplate())
 		return parsed{configLoad: configLoad{Config: cfg, Missing: true, Warnings: warnings}}, nil, nil
 	}
 	if err != nil {
 		return parsed{}, nil, fileError(err, "lesen", path)
 	}
-	cfg, seen, warnings := parseConfig(filepath.Base(path), string(data))
-	return parsed{configLoad: configLoad{Config: cfg, Warnings: warnings}, seen: seen}, data, nil
+	cfg, seen, warnings, legacy := parseConfig(filepath.Base(path), string(data))
+	return parsed{configLoad: configLoad{Config: cfg, Warnings: warnings, Legacy: legacy}, seen: seen}, data, nil
 }
 
 // parseConfig liest den Text der INI. name steht in den Warnungen.
 //
-// Schlüssel aus der Tabelle gelten überall in der Datei, auch unter
-// [Tasten]: neue Schlüssel werden ans Ende angehängt, und das Ende ist
-// meistens der Abschnitt [Tasten]. Alles andere unter [Tasten] ist eine Taste.
-func parseConfig(name, text string) (config, map[string]bool, []string) {
+// Schlüssel aus der Tabelle gelten überall in der Datei, auch unter einem
+// alten [Tasten]: neue Schlüssel werden ans Ende angehängt, und das Ende
+// ist bei Dateien aus 0.1.0 der Abschnitt [Tasten]. Alles andere unter
+// [Tasten] ist eine Taste aus 0.1.0 und landet in legacy.
+func parseConfig(name, text string) (config, map[string]bool, []string, legacyHotkeys) {
 	cfg := defaultConfig()
 	seen := map[string]bool{}
 	var warnings []string
-	warn := func(line int, format string, args ...any) {
-		warnings = append(warnings, fmt.Sprintf("%s Zeile %d: ", name, line)+fmt.Sprintf(format, args...))
+	var legacy legacyHotkeys
+	at := func(line int, format string, args ...any) string {
+		return fmt.Sprintf("%s Zeile %d: ", name, line) + fmt.Sprintf(format, args...)
 	}
 	usedAt := map[hotkey]int{}
-	inHotkeys := false
+	inLegacy, inUnknown := false, false
 
 	text = strings.TrimPrefix(text, "\ufeff") // Windows-Editoren setzen gern ein BOM davor
 	for i, line := range strings.Split(text, "\n") {
@@ -182,55 +173,61 @@ func parseConfig(name, text string) (config, map[string]bool, []string) {
 		}
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
 			section := strings.TrimSpace(line[1 : len(line)-1])
-			inHotkeys = isHotkeySection(section)
-			if !inHotkeys {
-				warn(n, "unbekannter Abschnitt [%s], die Zeilen darunter werden übergangen (gemeint war wohl [%s]).", section, hotkeySection)
+			inLegacy = isHotkeySection(section)
+			inUnknown = !inLegacy
+			if inLegacy {
+				legacy.Present = true
+			} else {
+				warnings = append(warnings, at(n, "unbekannter Abschnitt [%s], die Zeilen darunter werden übergangen.", section))
 			}
 			continue
 		}
 		key, value, ok := strings.Cut(line, "=")
 		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
 		if !ok {
-			warn(n, "%q ist nicht Schlüssel = Wert, übergangen.", line)
+			warnings = append(warnings, at(n, "%q ist nicht Schlüssel = Wert, übergangen.", line))
 			continue
 		}
 		if s, known := findSetting(key); known {
 			seen[s.key] = true
 			if err := s.apply(&cfg, value); err != nil {
 				_ = s.apply(&cfg, s.def) // ignore: Standardwerte prüft TestDefaultsAreValid
-				warn(n, "%s=%s geht nicht (%v). Es gilt %s.", s.key, value, err, s.def)
+				warnings = append(warnings, at(n, "%s=%s geht nicht (%v). Es gilt %s.", s.key, value, err, s.def))
 			}
 			continue
 		}
-		if !inHotkeys {
-			if _, err := parseHotkey(key); err == nil {
-				warn(n, "%s steht nicht unter [%s], übergangen. Tasten gehören in den Abschnitt [%s].", key, hotkeySection, hotkeySection)
-			} else {
-				warn(n, "unbekannte Einstellung %q, übergangen.", key)
-			}
-			continue
+		switch {
+		case inUnknown:
+			// schon beim Abschnitt gemeldet
+		case !inLegacy:
+			warnings = append(warnings, at(n, "unbekannte Einstellung %q, übergangen. Tasten richtest du über Rechtsklick aufs Symbol > Tasten einrichten ein.", key))
+		default:
+			legacy.add(key, value, n, usedAt, func(format string, args ...any) {
+				legacy.Warnings = append(legacy.Warnings, at(n, format, args...))
+			})
 		}
-		hk, err := parseHotkey(key)
-		if err != nil {
-			warn(n, "%s: %v. Übergangen.", key, err)
-			continue
-		}
-		tg, err := parseTarget(value)
-		if err != nil {
-			warn(n, "%s = %s: %v. Übergangen.", key, value, err)
-			continue
-		}
-		if first, dup := usedAt[hk]; dup {
-			warn(n, "%s steht schon in Zeile %d, die zweite Zeile wird übergangen.", hk, first)
-			continue
-		}
-		if hk.blocksTyping() {
-			warn(n, "%s ohne Strg, Alt oder Win fehlt dir danach beim Schreiben. Gilt trotzdem.", hk)
-		}
-		usedAt[hk] = n
-		cfg.Bindings = append(cfg.Bindings, binding{Hotkey: hk, Target: tg, Line: n})
 	}
-	return cfg, seen, warnings
+	return cfg, seen, warnings, legacy
+}
+
+// add liest eine Tastenzeile aus 0.1.0.
+func (l *legacyHotkeys) add(key, value string, line int, usedAt map[hotkey]int, warn func(string, ...any)) {
+	hk, err := parseHotkey(key)
+	if err != nil {
+		warn("%s: %v. Übergangen.", key, err)
+		return
+	}
+	tg, err := parseTarget(value)
+	if err != nil {
+		warn("%s = %s: %v. Übergangen.", key, value, err)
+		return
+	}
+	if first, dup := usedAt[hk]; dup {
+		warn("%s steht schon in Zeile %d, die zweite Zeile wird übergangen.", hk, first)
+		return
+	}
+	usedAt[hk] = line
+	l.Bindings = append(l.Bindings, binding{Hotkey: hk, Target: tg})
 }
 
 func isHotkeySection(name string) bool {
@@ -276,12 +273,8 @@ func configTemplate() string {
 	b.WriteString("# " + appName + ": Einstellungen\n")
 	b.WriteString("# Zeilen mit # sind Kommentare. Eine Zeile löschen bringt ihren Standardwert zurück.\n")
 	b.WriteString("# Gespeicherte Änderungen gelten nach ein paar Sekunden, ohne Neustart.\n")
+	b.WriteString("# Die Tasten stehen nicht hier: Rechtsklick aufs Symbol > Tasten einrichten.\n")
 	b.WriteString(configEntries(settings))
-	b.WriteString("\n[" + hotkeySection + "]\n")
-	for _, l := range hotkeyHelp {
-		b.WriteString("# " + l + "\n")
-	}
-	b.WriteString(defaultBinding + "\n")
 	return b.String()
 }
 

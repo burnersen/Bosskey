@@ -15,11 +15,15 @@
 //	logging.go          Log mit Rotation          (unverändert aus dem Kit)
 //	paths.go            wo Einstellungen und Log liegen (unverändert aus dem Kit)
 //	files.go            atomar schreiben          (unverändert aus dem Kit)
-//	config.go           INI: Einstellungen aus der Tabelle, Abschnitt [Tasten]
+//	config.go           INI: Einstellungen aus der Tabelle (alte Tasten nur lesen)
+//	bindings.go         tasten.json: die Tasten, Übernahme aus Version 0.1.0
 //	hotkey.go           "Strg+Alt+1" lesen und wieder schreiben
+//	capture.go          eine Taste aufnehmen (Rechnen, ohne Windows)
 //	desktop.go          Rechnen mit Desktops, ohne Windows (testbar)
 //	win32types.go       Strukturen der Windows-API (Größen per Test geprüft)
-//	*_windows.go        alles, was Windows direkt anspricht
+//	tray_windows.go     Symbol, Menü, Hotkeys, Nachrichtenschleife
+//	setup_windows.go    Fenster "Tasten einrichten" mit Tastatur-Hook
+//	*_windows.go        alles andere, was Windows direkt anspricht
 //	*_other.go          Ersatz für Linux, damit Tests und vet dort laufen
 package main
 
@@ -166,8 +170,8 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	return opts, nil
 }
 
-// checkConfig liest die Einstellungen, ohne etwas zu schreiben, und sagt,
-// was gilt. Exit-Code 1, sobald es etwas zu bemängeln gibt.
+// checkConfig liest Einstellungen und Tasten, ohne etwas zu schreiben,
+// und sagt, was gilt. Exit-Code 1, sobald es etwas zu bemängeln gibt.
 func checkConfig(out *output, logger *slog.Logger, paths appPaths) int {
 	loaded, err := readConfig(paths.ConfigFile)
 	if err != nil {
@@ -178,17 +182,40 @@ func checkConfig(out *output, logger *slog.Logger, paths appPaths) int {
 	} else {
 		out.Info("Einstellungen: " + paths.ConfigFile)
 	}
-	for _, b := range loaded.Config.Bindings {
+	warnings := loaded.Warnings
+
+	keysPath := bindingsPath(paths)
+	keys, err := readBindings(keysPath)
+	if err != nil {
+		return finish(out, logger, paths.LogFile, err)
+	}
+	list := keys.Bindings
+	switch {
+	case keys.Missing:
+		// So ginge es beim nächsten Start los, ohne dass hier etwas angelegt wird.
+		start := migrateBindings(loaded.Legacy)
+		list = start.Bindings
+		warnings = append(warnings, start.Warnings...)
+		if start.Migrated > 0 {
+			out.Info(fmt.Sprintf("Tasten: %s gibt es noch nicht, beim nächsten Start werden %d Taste(n) aus der INI übernommen.", keysPath, start.Migrated))
+		} else {
+			out.Info("Tasten: " + keysPath + " gibt es noch nicht, beim nächsten Start gilt die Standard-Taste.")
+		}
+	default:
+		out.Info("Tasten: " + keysPath)
+		warnings = append(warnings, keys.Warnings...)
+	}
+	for _, b := range sortedBindings(list) {
 		out.OK(b.Hotkey.String() + " = " + b.Target.String())
 	}
-	if len(loaded.Config.Bindings) == 0 {
-		loaded.Warnings = append(loaded.Warnings, "Keine Taste eingestellt: im Abschnitt [Tasten] fehlt eine Zeile wie \"Pause = 1\".")
+	if len(list) == 0 {
+		warnings = append(warnings, "Keine Taste eingestellt: Rechtsklick aufs Symbol > Tasten einrichten.")
 	}
-	for _, w := range loaded.Warnings {
+	for _, w := range warnings {
 		out.Warn(w)
 		logger.Warn("config", "problem", w)
 	}
-	if len(loaded.Warnings) > 0 {
+	if len(warnings) > 0 {
 		return exitError
 	}
 	out.OK("Alles in Ordnung.")

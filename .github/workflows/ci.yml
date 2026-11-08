@@ -93,8 +93,15 @@ jobs:
           if ((Start-Bosskey @('-probelauf')) -ne 0) { Write-Host "::error::Probelauf gescheitert"; exit 1 }
           $log = Get-Content (Join-Path $env:BOSSKEY_HOME 'logs\bosskey.log') -Raw
           Write-Host $log
-          foreach ($want in @('msg="config created"', 'msg="hotkey registered"', 'msg="probe finished"', 'msg=done')) {
+          # Erster Start: Einstellungen und Tasten anlegen, Fenster "Tasten einrichten" öffnen.
+          foreach ($want in @('msg="config created"', 'msg="hotkey registered"', 'msg="setup window opened"', 'msg="probe finished"', 'msg=done')) {
             if (-not $log.Contains($want)) { Write-Host "::error::im Log fehlt $want"; exit 1 }
           }
           if (-not (Test-Path (Join-Path $env:BOSSKEY_HOME 'Bosskey.ini'))) { Write-Host "::error::Bosskey.ini nicht angelegt"; exit 1 }
+          if (-not (Test-Path (Join-Path $env:BOSSKEY_HOME 'tasten.json'))) { Write-Host "::error::tasten.json nicht angelegt"; exit 1 }
+          if (-not (Test-Path (Join-Path $env:BOSSKEY_HOME 'animation.json'))) { Write-Host "::error::animation.json nicht angelegt"; exit 1 }
+          # Zweiter Start mit vorhandenen Dateien: kein erster Start mehr, das Fenster bleibt zu.
+          if ((Start-Bosskey @('-probelauf')) -ne 0) { Write-Host "::error::zweiter Probelauf gescheitert"; exit 1 }
+          $opened = (Select-String -Path (Join-Path $env:BOSSKEY_HOME 'logs\bosskey.log') -Pattern 'setup window opened').Count
+          if ($opened -ne 1) { Write-Host "::error::Fenster beim zweiten Start wieder geöffnet ($opened)"; exit 1 }
           exit 0

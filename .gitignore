@@ -21,6 +21,8 @@ secrets/
 *.log.[0-9]
 Bosskey.ini
 Bosskey.ini.bak
+tasten.json
+animation.json
 portable.txt
 logs/
 

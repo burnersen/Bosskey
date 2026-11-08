@@ -35,11 +35,13 @@ Release: vorher `.github/release-notes/1.2.3.md` schreiben, dann Tag `v1.2.3` pu
 
 ## Aufbau
 
-Siehe Kopfkommentar in `main.go`. `os.Exit` steht nur in `main()`, Fehler beim Start zeigt `finish()` (im Tray-Betrieb gesammelt als Meldungsfenster), alles danach kommt als Benachrichtigung am Symbol. Alle Pfade kommen aus `paths.go`, alle Einstellungen aus der Tabelle in `config.go`, die Tasten aus dem Abschnitt `[Tasten]`.
+Siehe Kopfkommentar in `main.go`. `os.Exit` steht nur in `main()`, Fehler beim Start zeigt `finish()` (im Tray-Betrieb gesammelt als Meldungsfenster), alles danach kommt als Benachrichtigung am Symbol. Alle Pfade kommen aus `paths.go`, alle Einstellungen aus der Tabelle in `config.go`. Die Tasten stehen seit 0.2.0 in `tasten.json` (schreibt nur das Programm, Kit K2), eingerichtet im Fenster aus `setup_windows.go`; der alte Abschnitt `[Tasten]` der INI wird nur einmal übernommen (`bindings.go`, `migrateBindings`).
 
 - Windows-API nur über `syscall` der Standardbibliothek, keine fremden Module. Strukturen stehen ohne Build-Tag in `win32types.go`, `TestWin32StructSizes` prüft ihre Größen gegen die Windows-Header.
 - Desktop-Wechsel: Registry lesen (`VirtualDesktopIDs`, `CurrentVirtualDesktop`), dann Strg+Win+Pfeil Schritt für Schritt mit Prüfung nach jedem Schritt (`desktop_windows.go`). Die inoffizielle COM-Schnittstelle bewusst nicht, sie bricht bei Windows-Updates.
-- Rechnen ohne Windows (`hotkey.go`, `desktop.go`, `config.go`) ist unter Linux getestet. Das Echte (Tasten, Animation, Adminprogramme im Vordergrund) lässt sich nur auf einem echten Windows prüfen; die CI startet den Tray dort mit `-probelauf`.
+- Tasten aufnehmen: Tastatur-Hook (WH_KEYBOARD_LL) nur während der Aufnahme. Die Logik, was verschluckt wird und wann der Hook wegkann, steht testbar in `capture.go`. Notbremsen: 15 Sekunden Zeitlimit, und der Tray nimmt einen hängengebliebenen Hook nach 3 Sekunden weg.
+- Animationen: `animation.go` (Zustand, "vorher" merken, testbar) und `animation_windows.go` (SystemParametersInfo, ohne Adminrechte). Nie ein "vorher" überschreiben, das schon gemerkt ist.
+- Rechnen ohne Windows (`hotkey.go`, `desktop.go`, `config.go`, `bindings.go`, `capture.go`, `animation.go`) ist unter Linux getestet. Das Echte (Tasten, Animation, Adminprogramme im Vordergrund) lässt sich nur auf einem echten Windows prüfen; die CI startet den Tray dort zweimal mit `-probelauf` (erster Start mit Fenster, zweiter ohne).
 - `logging.go`, `files.go` und `paths.go` kommen unverändert aus dem Kit und sind deshalb englisch kommentiert.
 
 ## Vor jedem Commit
