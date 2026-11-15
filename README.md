@@ -1,4 +1,28 @@
-# Bosskey
+<div align="center">
+
+# 🕶️ Bosskey
+
+### Eine Taste, und du bist sofort auf einem anderen Desktop.
+
+**Kleines Tray-Programm für Windows 10 und 11: per Tastendruck auf einen virtuellen Desktop deiner Wahl springen, ohne dass man den Wechsel sieht.**
+Kein Netzwerk. Keine Adminrechte. Eine EXE.
+
+[![Windows 10/11](https://img.shields.io/badge/Windows-10%2F11%20x64%20%7C%20ARM64-0078D6?logo=windows)](#benutzung)
+[![Geschrieben in Go](https://img.shields.io/badge/Made%20with-Go-00ADD8?logo=go)](#selbst-bauen)
+[![Lizenz: GPLv3](https://img.shields.io/badge/Lizenz-GPLv3-blue)](#lizenz)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Unterst%C3%BCtze%20mich-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/burnersen)
+
+**[⬇️ Neuestes Release herunterladen](https://github.com/burnersen/Bosskey/releases/latest)** · **[☕ Spendier mir einen Kaffee](https://ko-fi.com/burnersen)**
+
+<img src="docs/screenshot.png" alt="Das Fenster „Tasten einrichten“: eine Liste mit vier Tasten (Pause, Rollen, Strg+Alt+F9 und Strg+Alt+F10) und ihren Ziel-Desktops, darunter die Auswahl für eine neue Taste" width="460">
+
+<sub>Das Fenster „Tasten einrichten“ (Aufnahme unter Wine, unter Windows übernimmt es das Aussehen deines Systems).</sub>
+
+</div>
+
+> 💜 **Nutzt du Bosskey und es gefällt dir?** Ein ⭐ auf GitHub ist die einfachste Art, mir das zu sagen, und es bringt mehr, als man denkt: Sterne sind der sichtbare Beweis, dass ein Projekt gute Arbeit leistet, und darüber finden andere kleine Projekte wie dieses überhaupt erst Leute. Oder [erzähl mir, wofür du es nutzt](https://github.com/burnersen/Bosskey/issues/new), ich lese jede Nachricht. Danke, dass du da bist!
+
+---
 
 Ein kleines Programm für den Infobereich der Taskleiste: per Tastendruck auf einen virtuellen Desktop deiner Wahl. Gedacht als Boss-Taste: eine Taste, und du bist sofort auf Desktop 1, ohne dass man den Wechsel sieht. Mit mehreren Tasten springst du auf mehrere Desktops. Eingerichtet wird per Klick und Tastendruck, ohne Textdatei.
 
@@ -111,6 +135,10 @@ go build -ldflags "-H windowsgui" -o Bosskey.exe .
 ```
 
 Selbst gebaut gibt es das Standardsymbol von Windows. Das eigene Symbol bettet der Release-Bau mit go-winres ein.
+
+## ☕ Unterstützen
+
+Bosskey ist kostenlos und entsteht in meiner Freizeit, auf meiner eigenen Hardware und Stromrechnung. Wenn es dir Zeit gespart hat und du Danke sagen möchtest, kannst du [ein kleines Trinkgeld bei Ko-fi dalassen](https://ko-fi.com/burnersen), das hält Motivation und Kaffee am Laufen. ☕ Völlig freiwillig, und in jedem Fall: danke fürs Benutzen!
 
 ## Lizenz
 
