@@ -12,7 +12,9 @@ Kein Netzwerk. Keine Adminrechte. Eine EXE.
 [![Lizenz: GPLv3](https://img.shields.io/badge/Lizenz-GPLv3-blue)](#lizenz)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Unterst%C3%BCtze%20mich-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/burnersen)
 
-**[⬇️ Neuestes Release herunterladen](https://github.com/burnersen/Bosskey/releases/latest)** · **[☕ Spendier mir einen Kaffee](https://ko-fi.com/burnersen)**
+**[⬇️ Neuestes Release herunterladen](https://github.com/burnersen/Bosskey/releases/latest)** · **[🌐 Webseite](https://tech.burnersen.de/tools/bosskey/)** · **[☕ Spendier mir einen Kaffee](https://ko-fi.com/burnersen)**
+
+<sub>🇬🇧 In English: [tech.burnersen.de/en/tools/bosskey-en](https://tech.burnersen.de/en/tools/bosskey-en/)</sub>
 
 <img src="docs/screenshot.png" alt="Das Fenster „Tasten einrichten“: eine Liste mit vier Tasten (Pause, Rollen, Strg+Alt+F9 und Strg+Alt+F10) und ihren Ziel-Desktops, darunter die Auswahl für eine neue Taste" width="460">
 
