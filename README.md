@@ -30,7 +30,7 @@ Ein kleines Programm für den Infobereich der Taskleiste: per Tastendruck auf ei
 
 Nur für Windows 10 und 11 (x64 und ARM64).
 
-## Die wichtigsten Zusicherungen
+## Worauf Bosskey achtet
 
 - **Kein Netzwerk.** Bosskey arbeitet nur lokal, es ruft nirgends an und lädt nichts nach.
 - **Keine Adminrechte.** Alles läuft als normaler Nutzer, auch der Autostart und das Abschalten der Animationen.
@@ -141,6 +141,12 @@ Selbst gebaut gibt es das Standardsymbol von Windows. Das eigene Symbol bettet d
 ## ☕ Unterstützen
 
 Bosskey ist kostenlos und entsteht in meiner Freizeit, auf meiner eigenen Hardware und Stromrechnung. Wenn es dir Zeit gespart hat und du Danke sagen möchtest, kannst du [ein kleines Trinkgeld bei Ko-fi dalassen](https://ko-fi.com/burnersen), das hält Motivation und Kaffee am Laufen. ☕ Völlig freiwillig, und in jedem Fall: danke fürs Benutzen!
+
+## ⚠️ Haftungsausschluss
+
+Bosskey ist kostenlose Hobby-Software und wird **so, wie es ist, ohne jede Gewähr** bereitgestellt. Es ist mit Sorgfalt gebaut und getestet, die Nutzung erfolgt aber **auf eigene Gefahr**.
+
+Wo diese Anleitung beschreibt, was Bosskey tut, prüft oder nie tut, steht dort, wie es gedacht und gebaut ist, keine Zusage und keine Garantie: Software kann Fehler haben, und Systeme, Dienste und andere Programme verhalten sich nicht immer wie erwartet. Soweit gesetzlich zulässig, haftet der Autor nicht für Schäden oder Datenverlust durch die Nutzung dieser Software. Siehe Abschnitte 15 und 16 der [Lizenz](LICENSE).
 
 ## Lizenz
 
